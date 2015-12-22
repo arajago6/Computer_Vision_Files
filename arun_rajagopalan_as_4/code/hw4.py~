@@ -1,0 +1,264 @@
+import cv2
+import numpy as np
+import time
+import sys
+
+#Trackbar listeners
+def thres_val (x):
+    global th_pos
+    th_pos = x
+
+def gauss_var (x):
+    global v_pos
+    v_pos = x
+
+def neigh_size (x):
+    global s_pos
+
+    s_pos = x
+    if s_pos == 0:
+	s_pos = 1
+    elif s_pos % 2 == 0:
+        s_pos = s_pos-1
+
+def trace_wt (x):
+    global t_pos
+    t_pos = x
+
+def mtchpt_ct (x):
+    global mpc_pos
+    mpc_pos = x
+
+#Function to display the current image
+def draw_img():
+    global curr_img
+    cv2.imshow('HCD v1.0 :: Press ESC to EXIT, h for HELP',curr_img)
+
+#Function to plot harris corners by own implementation
+def harris_only(g_img):
+    global th_pos
+    global v_pos
+    global s_pos
+    global t_pos
+    global curr_img
+
+    x_img = cv2.Sobel(g_img,cv2.CV_64F,1,0,ksize = 3)
+    y_img = cv2.Sobel(g_img,cv2.CV_64F,0,1,ksize = 3)
+    x_img2 = x_img*x_img
+    #Calculating derivatives with the user-given neighbourhood value s_pos 
+    #and variance v_pos in the gaussian window for coorelation matrix
+    x_img2 = cv2.GaussianBlur(x_img2,(s_pos,s_pos),5*v_pos)
+    y_img2 = y_img*y_img
+    y_img2 = cv2.GaussianBlur(y_img2,(s_pos,s_pos),5*v_pos)
+    xy_img = x_img*y_img
+    xy_img = cv2.GaussianBlur(xy_img,(s_pos,s_pos),5*v_pos)
+    
+    #Calculating the trace of correlation matrix
+    trace = x_img2 + y_img2 
+    #Calculating the determinant of correlation matrix
+    dtmnt = (x_img2*y_img2) - (xy_img*xy_img)
+    #Calculating the cornerness measure of the window
+    mc_response = dtmnt - (0.01*t_pos) * (trace*trace)
+
+    #Using non-max suppression for better localization of corners
+    kernel = np.ones((3,3),np.uint8)
+    erosion = cv2.erode(mc_response,kernel,iterations = 1)
+    crow, ccol = g_img.shape[0], g_img.shape[1]
+    fin_img = np.zeros((g_img.shape[0],g_img.shape[1],3),np.uint8)
+    
+    for row in range(crow):
+	for col in range(ccol):
+	    val = g_img[row][col]
+	    fin_img[row][col] = [val,val,val]
+    
+    #Using non-max suppression for better localization of corners
+    fin_img[erosion>0.002*th_pos*erosion.max()]=[0,255,0]
+    return fin_img
+
+def harris_match(g_first,g_second):
+    global curr_img
+    global mpc_pos
+
+    h_first = harris_only(g_first)
+    h_second = harris_only(g_second)
+    
+    #Match the identical corners in the two given input images
+    ofrb_var = cv2.ORB_create()
+    (f_key,f_dscrpt) = ofrb_var.detectAndCompute(h_first, None)
+    (s_key,s_dscrpt) = ofrb_var.detectAndCompute(h_second, None)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    mtchs = bf.match(f_dscrpt,s_dscrpt)
+    mtchs = sorted(mtchs, key = lambda x:x.distance)
+    curr_img = cv2.drawMatches(h_first,f_key,h_second,s_key,mtchs[:mpc_pos],None,flags=2)
+
+def harris_draw(gd_img):
+    global curr_img
+
+    #Draw shapes centered around the detected corners in the two given input images
+    h_gdin = harris_only(gd_img)
+    ofrb_var = cv2.ORB_create()
+    dkey = ofrb_var.detect(h_gdin,None)
+    curr_img = cv2.drawKeypoints(h_gdin,dkey,None,color=(255,255,0),flags=0)
+    
+def process_img():
+    #Perform image processing based on the current operation flag
+    global curr_img
+    global first_img
+    global second_img
+
+    if op_flag == 'i':
+	#Loads unprocessed original image
+	draw_img()
+
+    elif op_flag == 'H':
+	#Does corner detection alone using own implementation
+	gray = cv2.cvtColor(curr_img, cv2.COLOR_BGR2GRAY)
+	curr_img = harris_only(gray)
+        draw_img()
+
+    elif op_flag == 'M':
+	#Does corner detection using own implementation and matching
+	first_gray = cv2.cvtColor(first_img, cv2.COLOR_BGR2GRAY)
+	second_gray = cv2.cvtColor(second_img, cv2.COLOR_BGR2GRAY)
+        harris_match(first_gray,second_gray)
+	draw_img()
+
+    elif op_flag == 'D':
+	#Does corner detection using own implementation and draws shapes 
+	gray = cv2.cvtColor(curr_img, cv2.COLOR_BGR2GRAY)
+	harris_draw(gray)
+        draw_img()
+
+    elif op_flag == 'h':
+	#Displays help text
+	curr_img = cv2.blur(curr_img,(50,50),0)
+	cv2.putText(curr_img, "Harris Corner Detector v1.0", (5, 25), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 0),\
+            thickness=2)
+	text = "This program does corner detection using own Harris implementation.\nReads image from file if path is given in command line\nor else reads from camera and processes continuously.\nKeys on keyboard that work with this app follow.\n\n'i'-Reload original image.\n'w'-Save current image.\n'H'-Performs own Harris corner detection on both images.\n'M'-Performs own Harris corner detection and matches corners.\n'h'-Display help\n\nTrackbars can be used to control manipulations in options 'H' and 'M'.\n\nPress ESC to EXIT and 'i' to startover."
+	t0, dt = 40, 10
+	for i, line in enumerate(text.split('\n')):
+    	    t = t0 + dt
+    	    cv2.putText(curr_img, line, (5, t), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 255, 0), thickness=1)
+	    dt += 15
+	draw_img()
+
+    else:
+	draw_img()
+
+#Function that listens to keyboard and maintains the global op_flag
+def kb_listen():
+
+    global op_flag
+    global c_atmpt 
+    global b_flag
+
+    n_op_flag = cv2.waitKey(10) & 0xFF
+    
+    if n_op_flag == ord('w'):
+	#Saves the current image to current folder
+	cv2.imwrite("out.jpg",curr_img)
+
+    elif n_op_flag == ord('i'):
+	op_flag = 'i'
+    
+    elif n_op_flag == ord('H'):
+	op_flag = 'H'
+	cv2.createTrackbar('THRESHOLD VALUE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',5,25,thres_val)
+	cv2.createTrackbar('GAUSSIAN VARIANCE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',0,25,gauss_var)
+	cv2.createTrackbar('NEIGHBOURHOOD SIZE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',3,25,neigh_size)
+	cv2.createTrackbar('TRACE WEIGHT\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',4,50,trace_wt)
+
+    elif n_op_flag == ord('M'):
+	op_flag = 'M'
+	cv2.createTrackbar('THRESHOLD VALUE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',5,25,thres_val)
+	cv2.createTrackbar('GAUSSIAN VARIANCE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',0,25,gauss_var)
+	cv2.createTrackbar('NEIGHBOURHOOD SIZE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',3,25,neigh_size)
+	cv2.createTrackbar('TRACE WEIGHT\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',4,50,trace_wt)
+	cv2.createTrackbar('POINT COUNT TO PLOT/MATCH\nPress M to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',15,100,mtchpt_ct)
+
+    elif n_op_flag == ord('D'):
+	op_flag = 'D'
+	cv2.createTrackbar('THRESHOLD VALUE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',5,25,thres_val)
+	cv2.createTrackbar('GAUSSIAN VARIANCE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',0,25,gauss_var)
+	cv2.createTrackbar('NEIGHBOURHOOD SIZE\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',3,25,neigh_size)
+	cv2.createTrackbar('TRACE WEIGHT\nPress H or M or D to enable','HCD v1.0 :: Press ESC to EXIT, h for HELP',4,50,trace_wt)
+
+    elif n_op_flag == ord('h'):
+	op_flag = 'h'
+
+    elif n_op_flag == 27:
+	print "INTENDED EXIT: ESC pressed. Program will terminate now!"
+	op_flag = 'e'
+	return
+
+    else: 
+	return
+
+#Program execution starts here
+print ("**Starting Harris Corner Detector v1.0**");
+arg_list = []
+op_flag = ''
+th_pos = 5
+v_pos = 0
+s_pos = 3
+t_pos = 4
+mpc_pos = 15
+
+#Gets all arguments, if no filename is specified, captures images from camera for processing
+#If filenames are specified, reads those particular images for processing
+#Also handles exceptions in filenames and number of arguments
+for arg in sys.argv:
+    arg_list.append(arg)
+if len(arg_list) == 1:
+    try:
+	print "Capturing and displaying image from camera..."
+    	cam_input = cv2.VideoCapture(0)
+    	cv2.namedWindow('HCD v1.0 :: Press ESC to EXIT, h for HELP', cv2.WINDOW_AUTOSIZE)
+
+   	while(True):
+
+            retvalue, first_img = cam_input.read()
+	    time.sleep(2)
+	    retvalue, second_img = cam_input.read()
+	    orig_img = np.concatenate((first_img, second_img), axis=1)
+            curr_img = orig_img
+    
+            process_img()
+            kb_listen()
+
+            if (op_flag == 'e'):
+	    	break
+
+    	cv2.destroyAllWindows()
+
+    except:
+        print "EXITED with ERROR: Unable to read/process file from the camera!"
+
+    else:
+	cam_input.release()
+
+elif len(arg_list) == 3:
+    try:
+	print "Reading and displaying image from the given path..."
+	cv2.namedWindow('HCD v1.0 :: Press ESC to EXIT, h for HELP', cv2.WINDOW_AUTOSIZE) 
+	while(True):
+	    
+	    first_img = cv2.imread(arg_list[1],1)
+	    second_img = cv2.imread(arg_list[2],1)
+	    orig_img = np.concatenate((first_img, second_img), axis=1)
+	    curr_img = orig_img
+
+	    process_img()
+            kb_listen()
+
+	    if (op_flag == 'e'):
+	        break
+
+    	cv2.destroyAllWindows()
+
+    except:
+        print "EXITED with ERROR: Unable to read/process file from the path!"
+
+else:
+    print "EXITED with ERROR: Incorrect number of arguments. Allowed is 0 or 2 (filenames)!"
+
