@@ -209,7 +209,6 @@ def process_img():
     else:
 	draw_img()
 
-
 #Function that listens to keyboard and maintains the global op_flag
 def kb_listen():
 
